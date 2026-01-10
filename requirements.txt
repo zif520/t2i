@@ -1,0 +1,14 @@
+# 核心深度学习框架
+torch>=2.1.0        # 必须 >=2.1 以获得稳定的 MPS (Mac GPU) 支持
+torchvision>=0.16.0
+
+# Hugging Face 生态
+diffusers>=0.24.0   # 包含 Transformer2DModel (DiT)
+transformers>=4.36.0 # 包含 CLIP Text Encoder
+accelerate>=0.25.0  # 简化多设备/MPS 训练代码
+datasets>=2.15.0    # 方便下载和处理 Pokemon 数据集
+
+# 辅助工具
+pillow              # 图像处理
+scipy               # 一些数学计算依赖
+tqdm                # 进度条
