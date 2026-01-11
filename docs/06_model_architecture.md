@@ -8,16 +8,16 @@
 graph TD
     %% --- 输入层 ---
     subgraph Inputs [模型输入]
-        ImgInput[Noisy Image<br>(Batch, 3, 64, 64)]
-        TimeInput[Timestep t<br>(Batch,)]
-        TextInput[Text Embeddings<br>(Batch, 77, 512)]
-        DummyClass[Dummy Class Labels<br>(Batch,)]
+        ImgInput[Noisy Image<br>Batch, 3, 64, 64]
+        TimeInput[Timestep t<br>Batch]
+        TextInput[Text Embeddings<br>Batch, 77, 512]
+        DummyClass[Dummy Class Labels<br>Batch]
     end
 
     %% --- Patchify 阶段 ---
-    subgraph PatchProcessing [图像分块 (Patchify)]
+    subgraph PatchProcessing [图像分块 Patchify]
         ImgInput --> Conv2D[Conv2d Embedding<br>Kernel=4, Stride=4]
-        Conv2D --> Flatten[Flatten -> (Batch, 256, 256)]
+        Conv2D --> Flatten[Flatten -> Batch, 256, 256]
         Flatten --> PosEmbed[Add Positional Embeddings]
         PosEmbed --> Tokens[Image Tokens]
     end
@@ -25,11 +25,11 @@ graph TD
     %% --- 条件处理 ---
     subgraph Conditioning [条件注入]
         TimeInput & DummyClass --> TimeProj[Timestep/Class Projection]
-        TimeProj --> AdaNormSignal[AdaLayerNormZero 信号<br>(Scale, Shift, Gate)]
+        TimeProj --> AdaNormSignal[AdaLayerNormZero 信号<br>Scale, Shift, Gate]
     end
 
     %% --- Transformer 主体 ---
-    subgraph TransformerBody [Transformer Blocks (x6 Layers)]
+    subgraph TransformerBody [Transformer Blocks x6 Layers]
         direction TB
         Tokens --> Block1[Block 1]
         Block1 --> Block2[Block 2]
@@ -38,16 +38,16 @@ graph TD
         
         %% 内部结构放大
         subgraph BlockDetail [Transformer Block 内部细节]
-            BlockIn[Input Tokens] --> AdaNorm1[AdaLayerNormZero 1<br>(自适应归一化)]
+            BlockIn[Input Tokens] --> AdaNorm1[AdaLayerNormZero 1<br>自适应归一化]
             AdaNormSignal -.-> AdaNorm1
             
-            AdaNorm1 --> SelfAttn[Self-Attention<br>(图像内部关联)]
+            AdaNorm1 --> SelfAttn[Self-Attention<br>图像内部关联]
             SelfAttn --> Resid1[Residual Connection]
             
             Resid1 --> AdaNorm2[AdaLayerNormZero 2]
             AdaNormSignal -.-> AdaNorm2
             
-            AdaNorm2 --> CrossAttn[Cross-Attention<br>(图像-文本关联)]
+            AdaNorm2 --> CrossAttn[Cross-Attention<br>图像-文本关联]
             TextInput -.-> CrossAttn
             CrossAttn --> Resid2[Residual Connection]
             
@@ -58,10 +58,10 @@ graph TD
 
     %% --- 输出层 ---
     subgraph OutputLayer [Unpatchify & 输出]
-        Block6 --> FinalNorm[Final Norm (AdaLayerNormZero)]
+        Block6 --> FinalNorm[Final Norm AdaLayerNormZero]
         AdaNormSignal -.-> FinalNorm
         FinalNorm --> LinearProj[Linear Projection]
-        LinearProj --> Reshape[Reshape -> (Batch, 3, 64, 64)]
+        LinearProj --> Reshape[Reshape -> Batch, 3, 64, 64]
         Reshape --> PredNoise[Predicted Noise]
     end
 

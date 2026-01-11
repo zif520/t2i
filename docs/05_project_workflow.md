@@ -7,21 +7,21 @@
 ```mermaid
 graph TD
     %% --- 初始化阶段 ---
-    subgraph Init [初始化阶段 (Initialization)]
+    subgraph Init [初始化阶段]
         direction TB
-        Config[src/config.py<br>配置加载] --> EnvCheck[设备检测 (Mac MPS)]
-        EnvCheck --> LoadData[加载数据 (src/data_loader.py)]
+        Config[src/config.py<br>配置加载] --> EnvCheck[设备检测 Mac MPS]
+        EnvCheck --> LoadData[加载数据 src/data_loader.py]
         
         subgraph DataPipeline [数据预处理流水线]
             Raw[CIFAR-10 Raw] --> Transform[Resize/Normalize]
-            Transform --> Label2Text[Label转Text<br>'airplane' -> 'a photo of a airplane']
+            Transform --> Label2Text[Label转Text<br>airplane -> a photo of a airplane]
             Label2Text --> Cache[In-Memory Cache<br>全量预加载至内存]
         end
         LoadData --> DataPipeline
         
-        EnvCheck --> BuildModel[构建模型 (src/model.py)]
-        BuildModel --> DiT[DiT (Transformer2DModel)]
-        BuildModel --> CLIP[CLIP Text Encoder (Frozen)]
+        EnvCheck --> BuildModel[构建模型 src/model.py]
+        BuildModel --> DiT[DiT Transformer2DModel]
+        BuildModel --> CLIP[CLIP Text Encoder Frozen]
         
         BuildModel --> ResumeCheck{检查中断恢复?}
         ResumeCheck -- Yes --> LoadWeights[加载最新 Checkpoint]
@@ -29,9 +29,9 @@ graph TD
     end
 
     %% --- 训练阶段 ---
-    subgraph Train [训练循环 (src/train.py)]
+    subgraph Train [训练循环 src/train.py]
         direction TB
-        Cache --> Batch[获取 Batch (Images, Labels)]
+        Cache --> Batch[获取 Batch Images, Labels]
         
         %% 文本条件分支
         Batch --> TextLogic{Text Embedding 策略}
@@ -57,7 +57,7 @@ graph TD
     end
 
     %% --- 推理阶段 ---
-    subgraph Infer [推理/生成 (src/inference.py)]
+    subgraph Infer [推理/生成 src/inference.py]
         UserPrompt[用户提示词] --> InfCLIP[CLIP Encode]
         RandomLatents[随机初始噪声] --> DDIM[调度器去噪循环]
         
