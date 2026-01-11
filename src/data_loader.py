@@ -101,7 +101,60 @@ class TextToImageDataset:
         # 传入 bound method self._transform_function 是可以 picklable 的
         dataset.set_transform(self._transform_function)
         
+        # 内存缓存优化 (In-Memory Cache)
+        if hasattr(config, "in_memory_cache") and config.in_memory_cache:
+            if config.dataset_name == "cifar10":
+                print("⚡️ 正在将 CIFAR-10 全量加载到内存 (In-Memory Cache) ...")
+                # 遍历一次 dataset，触发 transform，并堆叠为 Tensor
+                # 注意: 这会消耗约 700MB 内存，但会极大加速训练
+                # 由于 dataset 设置了 transform，迭代它就会得到处理后的 Tensor
+                
+                # 为了加速，我们可以用 DataLoader 多进程来做这个预加载
+                temp_loader = DataLoader(
+                    dataset, 
+                    batch_size=1000, 
+                    num_workers=config.dataloader_num_workers,
+                    shuffle=False
+                )
+                
+                cached_data = []
+                from tqdm import tqdm
+                for batch in tqdm(temp_loader, desc="Caching Dataset"):
+                    cached_data.append(batch)
+                
+                # 构造一个新的 TensorDataset
+                # 我们需要合并 list of batches
+                # batch 是一个 dict: {'pixel_values': Tensor, 'input_ids': Tensor, 'labels': Tensor}
+                
+                final_pixel_values = torch.cat([b["pixel_values"] for b in cached_data], dim=0)
+                final_input_ids = torch.cat([b["input_ids"] for b in cached_data], dim=0)
+                final_labels = torch.cat([b["labels"] for b in cached_data], dim=0) if "labels" in cached_data[0] else None
+                
+                print(f"✅ 缓存完成! Images: {final_pixel_values.shape}, RAM占用: {final_pixel_values.element_size() * final_pixel_values.numel() / 1e6:.2f} MB")
+                
+                # 创建一个简单的 TensorDatasetWrapper (必须是可 picklable 的，所以定义在外面)
+                return InMemoryDataset(final_pixel_values, final_input_ids, final_labels)
+
         return dataset
+
+# 必须定义在模块级别，以便 multiprocessing 可以 pickle
+class InMemoryDataset(torch.utils.data.Dataset):
+    def __init__(self, pixel_values, input_ids, labels=None):
+        self.pixel_values = pixel_values
+        self.input_ids = input_ids
+        self.labels = labels
+        
+    def __len__(self):
+        return len(self.pixel_values)
+    
+    def __getitem__(self, idx):
+        item = {
+            "pixel_values": self.pixel_values[idx],
+            "input_ids": self.input_ids[idx]
+        }
+        if self.labels is not None:
+            item["labels"] = self.labels[idx]
+        return item
 
 def get_dataloader():
     dataset_handler = TextToImageDataset()

@@ -19,7 +19,7 @@ class TrainingConfig:
     attention_head_dim: int = 64 # 每个头的维度 (总 hidden_dim = 4 * 64 = 256)
     
     # --- 2. 训练参数 ---
-    train_batch_size: int = 32  # 批次大小，CIFAR10 较小，可以适当增大 batch
+    train_batch_size: int = 128  # 批次大小 (优化: 32 -> 128 以利用 Mac 算力)
     eval_batch_size: int = 32   # 验证/推理时的批次大小
     num_epochs: int = 5         # 训练轮数 (CIFAR10 数据量大，5 轮相当于 300k 样本)
     learning_rate: float = 1e-4 # 学习率
@@ -33,6 +33,7 @@ class TrainingConfig:
     # DataLoader 优化
     dataloader_num_workers: int = 4  # Mac M系列芯片通常有多个核心，开启多进程加载
     dataloader_persistent_workers: bool = True # 保持 worker 进程存活，减少创建开销 
+    in_memory_cache: bool = True # 是否将数据集全部预加载到内存 (针对 CIFAR-10 优化) 
     
     # --- 4. 数据与路径 ---
     dataset_name: str = "cifar10"        # 数据集名称 (60k images)
