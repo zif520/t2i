@@ -47,6 +47,11 @@ def inference(prompt, model_path, guidance_scale=7.5, num_steps=50):
         
         # 加载权重
         from diffusers.models.modeling_utils import load_state_dict
+        
+        # 检查路径是否存在
+        if not os.path.exists(model_path):
+             raise FileNotFoundError(f"模型路径不存在: {model_path}")
+             
         if os.path.isdir(model_path):
              # 尝试查找 safetensors
              weight_path = os.path.join(model_path, "diffusion_pytorch_model.safetensors")
@@ -54,6 +59,9 @@ def inference(prompt, model_path, guidance_scale=7.5, num_steps=50):
                  weight_path = os.path.join(model_path, "diffusion_pytorch_model.bin")
         else:
              weight_path = model_path
+             
+        if not os.path.exists(weight_path):
+             raise FileNotFoundError(f"权重文件不存在: {weight_path}")
              
         print(f"⚖️ 加载权重: {weight_path}")
         state_dict = load_state_dict(weight_path)
@@ -66,8 +74,22 @@ def inference(prompt, model_path, guidance_scale=7.5, num_steps=50):
         
     except Exception as e:
         print(f"⚠️ 自定义加载失败: {e}")
+        # 如果是因为文件找不到，就不必回退了，因为回退也会失败
+        if isinstance(e, FileNotFoundError):
+             raise e
+             
         print("尝试回退到 from_pretrained...")
-        model = Transformer2DModel.from_pretrained(model_path, use_safetensors=True)
+        try:
+             # 如果是文件夹且没有 config.json，from_pretrained 会失败
+             # 所以我们先检查一下
+             if os.path.isdir(model_path) and not os.path.exists(os.path.join(model_path, "config.json")):
+                  print(f"❌ 目录中缺少 config.json，无法使用 from_pretrained。")
+                  raise e
+                  
+             model = Transformer2DModel.from_pretrained(model_path, use_safetensors=True)
+        except Exception as e_pretrained:
+             print(f"❌ from_pretrained 也失败了: {e_pretrained}")
+             raise e_pretrained
 
     model.to(device)
     model.eval()
@@ -153,34 +175,38 @@ def inference(prompt, model_path, guidance_scale=7.5, num_steps=50):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prompt", type=str, default="a red pokemon", help="生成的提示词")
-    
-    # 自动查找最新的 checkpoint
-    default_path = None
-    if os.path.exists(config.output_dir):
-        # 列出所有 checkpoint 文件夹
-        checkpoints = [d for d in os.listdir(config.output_dir) if d.startswith("checkpoint-epoch-")]
-        if checkpoints:
-            # 排序规则：提取 epoch 数字进行排序 (checkpoint-epoch-1, checkpoint-epoch-2, ...)
-            # 假设文件夹格式严格为 checkpoint-epoch-N
-            try:
-                checkpoints.sort(key=lambda x: int(x.split("-")[-1]))
-                default_path = os.path.join(config.output_dir, checkpoints[-1])
-            except ValueError:
-                # 如果格式不对，就按字母序
-                checkpoints.sort()
-                default_path = os.path.join(config.output_dir, checkpoints[-1])
-    
-    # 如果没找到，回退到默认的 checkpoint-epoch-50 (用于提示用户)
-    if default_path is None:
-        default_path = os.path.join(config.output_dir, "checkpoint-epoch-50")
-
-    parser.add_argument("--model_path", type=str, default=default_path)
+    parser.add_argument("--prompt", type=str, default=None, help="生成的提示词")
+    parser.add_argument("--model_path", type=str, default=None, help="模型权重路径")
     
     args = parser.parse_args()
-    
-    if not os.path.exists(args.model_path):
-         print(f"⚠️ 警告: 模型路径 {args.model_path} 不存在。请先训练模型或检查路径。")
-         print(f"提示: 您可以使用 --model_path 指定具体路径。")
+
+    # 3. 准备 Prompt
+    # 既然是用 CIFAR-10 训练的，我们试着生成一个 CIFAR-10 类别
+    # 也可以手动指定 --prompt
+    if args.prompt:
+        prompt = args.prompt
     else:
-        inference(args.prompt, args.model_path)
+        if "cifar10" in config.dataset_name:
+            prompt = "a photo of a airplane" # 默认生成飞机
+        else:
+            prompt = "a drawing of a green pokemon with red eyes"
+            
+    # 4. 自动检测最新 Checkpoint
+    model_path = args.model_path
+    if model_path is None:
+        if os.path.exists(config.output_dir):
+            # 找最新的 checkpoint
+            checkpoints = [d for d in os.listdir(config.output_dir) if d.startswith("checkpoint-epoch-")]
+            if checkpoints:
+                # 简单的排序: epoch-X, 按 X 排序
+                checkpoints.sort(key=lambda x: int(x.split("-")[-1]))
+                latest_checkpoint = checkpoints[-1]
+                model_path = os.path.join(config.output_dir, latest_checkpoint)
+                print(f"🔄 自动检测到最新模型: {model_path}")
+            else:
+                # 如果没有 checkpoint，但有 logs，可能还没存？或者直接用 output_dir
+                model_path = config.output_dir
+        else:
+            model_path = config.output_dir
+            
+    inference(prompt, model_path)
