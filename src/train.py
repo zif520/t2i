@@ -37,6 +37,33 @@ def train():
     
     # 模型
     model = get_dit_model()
+    
+    # --- 自动检测 Resume (中断恢复) ---
+    start_epoch = 0
+    resume_path = None
+    if os.path.exists(config.output_dir):
+        checkpoints = [d for d in os.listdir(config.output_dir) if d.startswith("checkpoint-epoch-")]
+        if checkpoints:
+            # 按 epoch 数字排序
+            checkpoints.sort(key=lambda x: int(x.split("-")[-1]))
+            latest_checkpoint = checkpoints[-1]
+            resume_path = os.path.join(config.output_dir, latest_checkpoint)
+            
+            # 解析已完成的 Epoch
+            start_epoch = int(latest_checkpoint.split("-")[-1])
+            
+            if start_epoch < config.num_epochs:
+                print(f"🔄 检测到中断的训练: {latest_checkpoint}")
+                print(f"📥 正在从 Epoch {start_epoch} 恢复权重...")
+                # 加载权重覆盖原模型
+                model = Transformer2DModel.from_pretrained(resume_path)
+            else:
+                print(f"✅ 检测到训练已完成 (Epoch {start_epoch}/{config.num_epochs})，若需重新训练请清理 output 目录。")
+                start_epoch = 0 # 或者直接退出? 这里让它从 0 开始或者保持完成状态比较好。
+                # 如果已经跑完了，就不加载了，或者加载了也没用，因为循环不会执行。
+                # 让用户决定吧，这里假设用户想继续跑或者重跑。
+                # 如果是 fully trained，range(5, 5) 是空的，直接结束。
+                
     text_encoder = get_text_encoder()
     
     # 优化器
@@ -89,16 +116,32 @@ def train():
         
         print(f"✅ Text Embeddings 预计算完成! Shape: {cached_text_embeddings.shape}")
 
+    # 优化 3: 内存格式优化 (Channels Last)
+    # 适用于卷积层较多的网络，在 GPU 上通常更快 (MPS 也有一定收益)
+    model = model.to(memory_format=torch.channels_last)
+    
     # 5. 训练循环
     global_step = 0
     
-    for epoch in range(config.num_epochs):
+    # 如果是 Resume，需要快进 LR Scheduler 和 global_step
+    if start_epoch > 0:
+        steps_per_epoch = len(train_dataloader)
+        resume_step = start_epoch * steps_per_epoch
+        global_step = resume_step
+        print(f"⏩ 正在快进 LR Scheduler 到 step {resume_step} ...")
+        # 注意：这里简单的循环 step 可能比较慢，但最稳健
+        # 对于 AdamW + Cosine，这一步很重要
+        for _ in range(resume_step):
+            lr_scheduler.step()
+    
+    for epoch in range(start_epoch, config.num_epochs):
         model.train()
         progress_bar = tqdm(total=len(train_dataloader), disable=not accelerator.is_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
 
         for step, batch in enumerate(train_dataloader):
-            clean_images = batch["pixel_values"]
+            # 优化: 确保输入也是 channels_last
+            clean_images = batch["pixel_values"].to(memory_format=torch.channels_last)
             
             # --- A. 采样噪声 ---
             # 生成与输入图像形状一致的高斯噪声
@@ -133,27 +176,29 @@ def train():
             # 我们用全 0 作为 class label，相当于模型认为所有图片都属于同一个"类别"
             dummy_class_labels = torch.zeros(bsz, dtype=torch.long, device=clean_images.device)
             
-            model_pred = model(
-                noisy_images, 
-                timestep=timesteps, 
-                encoder_hidden_states=encoder_hidden_states,
-                class_labels=dummy_class_labels
-            ).sample
+            # 开启梯度累积上下文 (虽然这里是 1，但保持规范)
+            with accelerator.accumulate(model):
+                model_pred = model(
+                    noisy_images, 
+                    timestep=timesteps, 
+                    encoder_hidden_states=encoder_hidden_states,
+                    class_labels=dummy_class_labels
+                ).sample
 
-            # --- F. 计算 Loss ---
-            # 目标是预测添加的那个噪声
-            loss = F.mse_loss(model_pred, noise)
+                # --- F. 计算 Loss ---
+                # 目标是预测添加的那个噪声
+                loss = F.mse_loss(model_pred, noise)
 
-            # --- G. 反向传播 ---
-            accelerator.backward(loss)
-            
-            # 梯度裁剪 (防止梯度爆炸)
-            if accelerator.sync_gradients:
-                accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                # --- G. 反向传播 ---
+                accelerator.backward(loss)
                 
-            optimizer.step()
-            lr_scheduler.step()
-            optimizer.zero_grad()
+                # 梯度裁剪 (防止梯度爆炸)
+                if accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                    
+                optimizer.step()
+                lr_scheduler.step()
+                optimizer.zero_grad(set_to_none=True) # set_to_none=True 略微节省显存和操作
 
             progress_bar.update(1)
             progress_bar.set_postfix(loss=loss.item())
@@ -161,12 +206,12 @@ def train():
 
         # 每个 Epoch 结束后保存模型
         if accelerator.is_main_process:
-            if (epoch + 1) % 5 == 0 or epoch == config.num_epochs - 1:
-                save_path = os.path.join(config.output_dir, f"checkpoint-epoch-{epoch+1}")
-                # 保存 Unwrap 后的模型 (去除 DDP/MPS 包装)
-                unwrapped_model = accelerator.unwrap_model(model)
-                unwrapped_model.save_pretrained(save_path)
-                print(f"\n💾 模型已保存至: {save_path}")
+            # 修改: 每个 Epoch 都保存，防止意外中断丢失进度
+            save_path = os.path.join(config.output_dir, f"checkpoint-epoch-{epoch+1}")
+            # 保存 Unwrap 后的模型 (去除 DDP/MPS 包装)
+            unwrapped_model = accelerator.unwrap_model(model)
+            unwrapped_model.save_pretrained(save_path)
+            print(f"\n💾 模型已保存至: {save_path}")
 
     print("🎉 训练完成！")
 
